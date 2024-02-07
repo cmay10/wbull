@@ -4,52 +4,59 @@ import pandas as pd
 import warnings
 
 warnings.filterwarnings("ignore")
+senate_transactions = pd.read_csv(
+    "https://senate-stock-watcher-data.s3-us-west-2.amazonaws.com/aggregate/all_transactions.csv"
+)
+house_transactions = pd.read_csv(
+    "https://house-stock-watcher-data.s3-us-west-2.amazonaws.com/data/all_transactions.csv"
+)
 
+senate_tickers = list(senate_transactions["ticker"].unique())
+house_tickers = list(house_transactions["ticker"].unique())
 
-sp500 = pd.read_html("https://en.wikipedia.org/wiki/List_of_S%26P_500_companies")[0]
-sp500["Symbol"] = sp500["Symbol"].str.replace(".","-",regex=False)
-sp500 = sorted(list(sp500["Symbol"].values))
-
-nasdaq100 = pd.read_html("https://en.wikipedia.org/wiki/Nasdaq-100")[4]
-nasdaq100["Ticker"] = nasdaq100["Ticker"].str.replace(".","-",regex=False)
-nasdaq100 = sorted(list(nasdaq100["Ticker"].values))
-
-tickers = sorted(list(set(nasdaq100 + sp500)))
+tickers = list(set(senate_tickers + house_tickers))
+tickers = sorted([str(t) for t in tickers])
 
 
 did = "0294234787be44a4a5a90b883b0c8f15"
 api = Api(did)
 
 today = datetime.today().date()
-first_date = datetime.fromisoformat("2010-01-01").date()
+first_date = datetime.fromisoformat("2014-01-01").date()
 
 data = pd.DataFrame()
-for i,ticker in enumerate(tickers):
-    print(ticker,f"{i+1}/{len(tickers)}")
+for i, ticker in enumerate(tickers[:9]):
+    print(ticker, f"{i+1}/{len(tickers)}")
     ticker_data = pd.DataFrame()
     d = today
     while d >= first_date:
         try:
-            df = api.get_ohlc(ticker=ticker, interval="m60", count=1200, end_date=d.isoformat())
+            df = api.get_ohlc(
+                ticker=ticker, interval="d1", count=1200, end_date=d.isoformat()
+            )
 
             d = df["close_date"].dt.date.values[0]
 
-            ticker_data = pd.concat([ticker_data,df])
+            ticker_data = pd.concat([ticker_data, df])
         except:
+            with open("errors.txt", "a") as f:
+                f.write(f"{ticker}\n")
+            print(f"Could not get data for {ticker}")
             break
-    
-    ticker_data["close_date"] = ticker_data["close_date"].dt.round("30T")
-    ticker_data = ticker_data.sort_values(by="close_date").drop_duplicates()
-    ticker_data = ticker_data.set_index("close_date",drop=True)
-    ticker_data[ticker] = ticker_data["close"]
-    ticker_data = ticker_data[[ticker]]
 
+    if not ticker_data.empty:
+        ticker_data["close_date"] = ticker_data.close_date.dt.round("1d").dt.date
+        ticker_data = ticker_data.sort_values(by="close_date").drop_duplicates()
+        ticker_data = ticker_data.set_index("close_date", drop=True)
+        ticker_data.columns = pd.MultiIndex.from_product(
+            [[ticker], ticker_data.columns]
+        )
 
-    if data.empty:
-        data = ticker_data
-    else:
-        data = data.join(ticker_data,how="outer")
-
+        if data.empty:
+            data = ticker_data
+        else:
+            data = data.join(ticker_data, how="outer")
 
 data.to_csv("data.csv")
-
+data.to_parquet("data.parquet")
+data.to_feather("data.feather")
